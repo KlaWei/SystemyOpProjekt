@@ -1,7 +1,16 @@
 Implementacja części biblioteki pthreads, przy pomocy ucontext.h.
 
 Funkcjonalność biblioteki:
- - inicjalizacja
- - wątki: create, yield, waitall
- - mutexy: init, lock, unlock
- - zmienne warunkowe: init, wait, signal, broadcast
+ - inicjalizacja: void thread_libinit()
+ - tworzenie wątku: void thread_create(void func(void *), void *arg)
+ - void thread_yield(void)
+ - inicjalizacja mutexa: void thread_lock_init(lock_t *lock)
+ - inicjalizacja zmiennej warunkowej: void thread_cond_init(cond_t *cond)
+ - void thread_lock(lock_t *lock)
+ - void thread_unlock(lock_t *lock)
+ - void thread_wait(lock_t *lock, cond_t *cond)
+ - void thread_signal(cond_t *cond)
+ - int thread_waitall()
+
+Całość będzie zaimplementowana w języku C. Kolejka wątków oczekujących na sygnał
+i wątków gotowych do wykonywania będzie zaimplementowana algorytmem FIFO.
