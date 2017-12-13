@@ -1,0 +1,7 @@
+Implementacja części biblioteki pthreads, przy pomocy ucontext.h.
+
+Funkcjonalność biblioteki:
+ - inicjalizacja
+ - wątki: create, yield, waitall
+ - mutexy: init, lock, unlock
+ - zmienne warunkowe: init, wait, signal, broadcast
