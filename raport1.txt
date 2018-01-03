@@ -1,0 +1,12 @@
+Raport 1
+
+Postępy w projekcie: wstępna implementacja funkcji inicjalizującej
+bibliotekę (libinit), tworzącej wątki (thread_create) oraz funkcji
+thread_join i thread_exit. Implementacja kolejki przechowującej 
+(uproszczony) blok kontrolny wątków oraz kilku funkcji ją obsługujących.
+
+Dalsze plany: Przede wszystkim zaimplementowanie funkcji obsługujących mutexy
+i ulepszenie/poprawienie istniejących.
+
+Odstępstwa od specyfikacji: Dodałam fukcje join i exit, niektóre typy funkcji
+i argumentów są inne (głównie żeby było wygodniej się nimi posługiwać).
