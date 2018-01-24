@@ -30,31 +30,46 @@ struct queue {
 }; typedef struct queue t_queue;
 
 
+struct tid_n {
+    int tid;
+    struct tid_n *next;
+}; typedef struct tid_n tid_node;
+
+
+struct tid_l {
+    tid_node *first;
+    tid_node *last;
+}; typedef struct tid_l tid_list;
+
+
 struct lock {
     int *lock;
     int count;
     int state;
     int tid_owner;
-    int waiting_threads[50];
+    tid_list *waiting_threads;
     int index;
+    int waiting_threads_no;
     struct lock *next;
 
 }; typedef struct lock lock_t;
+
 
 struct lock_l {
     lock_t *first;
     lock_t *last;
 }; typedef struct lock_l lock_list;
 
+
+// lista z semaforami
 lock_list *locks;
 
 int t_id = 0;
 
-// one queue for now, might add seperate for blocked & ready
+// kolejka ze wszystkimi wątkami
 t_queue *thread_q;
 
 t_cb *currently_running;
-
 
 
 t_cb* get_by_tid(int tid) {
@@ -69,15 +84,19 @@ t_cb* get_by_tid(int tid) {
     return temp;
 }
 
+
+// Dodawanie nowego semafora
 void add_to_lock_list(int *m, int cnt) {
     lock_t *new = (lock_t*)malloc(sizeof(lock_t));
-    //new->waiting_threads = (t_queue)malloc(sizeof(t_queue*))
-    //new->waiting_threads->first = NULL
-    //new->waiting_threads->last = NULL
-    for (int i=0;i<50;i++) {
-        new->waiting_threads[i]=-1;
-    }
-    new->index = -1;
+    new->waiting_threads = (tid_list*)malloc(sizeof(tid_list));
+    new->waiting_threads->first = NULL;
+    new->waiting_threads->last = NULL;
+
+    if (debug) printf("creating new lock\n");
+
+
+    //new->index = 0;
+    new->waiting_threads_no = 0;
     new->count = cnt;
     new->lock = m;
     new->next = NULL;
@@ -93,6 +112,7 @@ void add_to_lock_list(int *m, int cnt) {
         locks->last = new;
     }
 }
+
 
 lock_t* get_lock(int* m) {
     lock_t *temp = locks->first;
@@ -164,15 +184,34 @@ void thread_lock(int *l) {
     lock_t *m = get_lock(l);
     if (m->state == UNLOCKED){
         m->count--;
+        if (debug) 
+            printf("in thread_lock, count: %d, currently_running: %d\n", m->count,currently_running->tid);
         if(m->count <= 0) m->state = LOCKED;
         m->tid_owner = currently_running->tid;
     }
     else {
+        // nie ma dostępnych zasobów, wątek musi czekać
+        m->waiting_threads_no++;
+
         t_cb* blocked = currently_running;
         blocked->state = BLOCKED;
-        m->waiting_threads[++m->index] = blocked->tid;
-        t_cb *tmp = get_nxt_ready_thread();
-        if(swapcontext(blocked->t_context, tmp->t_context) == -1) {
+
+        tid_node* tmp = (tid_node*)malloc(sizeof(tid_node));
+        tmp->tid = blocked->tid;
+        tmp->next = NULL;
+
+        if(m->waiting_threads->first == NULL) {
+            m->waiting_threads->first = tmp;
+            m->waiting_threads->last = tmp;
+        }
+
+        else {
+            m->waiting_threads->last->next = tmp;
+            m->waiting_threads->last = tmp;
+        }
+
+        t_cb *nxt_t = get_nxt_ready_thread();
+        if(swapcontext(blocked->t_context, nxt_t->t_context) == -1) {
             printf("err swap cntxt\n");
             exit(EXIT_FAILURE);
         }
@@ -180,28 +219,44 @@ void thread_lock(int *l) {
 }
 
 
-
+// sem signal
 void thread_unlock(int *l) {
     lock_t *m = get_lock(l);
-    if(m->index != -1) {
+    if (debug) printf("thread %d unlocking\n", currently_running->tid);
+
+    // zdejmij wątek z kolejki
+    if(m->waiting_threads_no != 0) {
         int i = 0;
-        while(m->waiting_threads[i]!=-1) {
-            i++;
-        }
-        t_cb* tmp = get_by_tid(m->waiting_threads[i]);
-        tmp->state = READY;
+        m->waiting_threads_no--;
+
+        tid_node* t = m->waiting_threads->first;
+        t_cb* thr = get_by_tid(t->tid);
+        m->waiting_threads->first = m->waiting_threads->first->next;
+        free(t);
+
+        //while(m->waiting_threads[i]!=-1 && i<50) {
+        //    if (debug) printf("thread with lock: %d\n", m->waiting_threads[i]);
+        //    i++;
+        //}
+        //t_cb* tmp = get_by_tid(m->waiting_threads[i]);
+        thr->state = READY;
     }
     else {
+        m->state = UNLOCKED;
         m->count++;
     }
 }
 
-// creating main thread
+// inicjalizacja biblioteki, tworzenie głównego wątku
 void libinit() {
     thread_q = (t_queue*)malloc(sizeof(t_queue));
+    locks = (lock_list*)malloc(sizeof(lock_list));
+    locks->first = NULL;
+    locks->last = NULL;
     thread_q->first = NULL;
     thread_q->last = NULL;
     currently_running = NULL;
+
     ucontext_t *new_cntx = (ucontext_t*)malloc(sizeof(ucontext_t));
 
     if(getcontext(new_cntx) == -1) {
@@ -230,7 +285,7 @@ int thread_create(void *(*func)(void *), void *arg) {
     makecontext(new_cntx, (void (*)(void))func, 1, arg);
     enqueue(t_id++, new_cntx, READY);
 
-    print_queue();
+    if (debug) print_queue();
 
     return thread_q->last->tid;
 }
@@ -259,13 +314,11 @@ void thread_join(int thread_tid, void **retval) {
     currently_running = temp;
     temp->state = RUNNING;
     temp->parent_thread_id = parent->tid;
-    //printf("currently running after join: %d\n", currently_running->tid);
-    //printf("old tid: %d\n", parent->tid);
+
     if (swapcontext(parent->t_context, temp->t_context) == -1) {
         printf("err swap cntxt\n");
+        exit(EXIT_FAILURE);
     }
-    //setcontext(temp->t_context);
-    //print_queue();
 }
 
 void thread_exit(void *retval) {
