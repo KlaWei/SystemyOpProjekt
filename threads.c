@@ -48,6 +48,7 @@ struct lock {
     int state;
     int tid_owner;
     tid_list *waiting_threads;
+    tid_list *lock_holders;
     int index;
     int waiting_threads_no;
     struct lock *next;
@@ -69,12 +70,15 @@ int t_id = 0;
 // kolejka ze wszystkimi wątkami
 t_queue *thread_q;
 
+tid_list *ready_threads;
+
 t_cb *currently_running;
 
 
 t_cb* get_by_tid(int tid) {
     t_cb *temp = thread_q->first;
     while (temp != NULL) {
+        printf("temp->tid = %d\n", temp->tid);
         if (temp->tid == tid) {
             break;
         }
@@ -94,8 +98,6 @@ void add_to_lock_list(int *m, int cnt) {
 
     if (debug) printf("creating new lock\n");
 
-
-    //new->index = 0;
     new->waiting_threads_no = 0;
     new->count = cnt;
     new->lock = m;
@@ -146,17 +148,55 @@ void enqueue(int tid, ucontext_t *contx, int state) {
     }
 }
 
+void print_queue();
+
+void move_to_end(int tid) {
+    t_cb *temp = thread_q->first;
+    t_cb *prev = temp;
+    printf("before\n");
+    print_queue();
+
+    if (temp->tid == tid) {
+        thread_q->first = temp->next;
+        temp->next = NULL;
+        thread_q->last->next = temp;
+        return;
+    }
+
+    while(temp != NULL) {
+        if(temp->tid == tid) {
+            break;
+        }
+        prev = temp;
+        temp = temp->next;
+    }
+
+    prev->next = temp->next;
+    thread_q->last->next = temp;
+    thread_q->last = temp;
+    temp->next = NULL;
+
+    printf("after movin %d to end , queue\n", tid);
+    print_queue();
+}
+
 
 t_cb* get_nxt_ready_thread() {
     t_cb *temp = thread_q->first;
-    if (thread_q->first == NULL) return NULL;
+    if (thread_q->first == NULL) {
+        return NULL;
+    }
     while (temp != NULL) {
         if (temp->state == READY) break;
         temp = temp->next;
     }
 
+    if(temp==NULL) {
+        exit(EXIT_FAILURE);
+    }
     return temp;
 }
+
 
 
 void print_queue() {
@@ -169,16 +209,18 @@ void print_queue() {
     printf("\n");
 }
 
+
 void thread_exec(void* (*func)(void*), void* arg) {
-    //printf("executing!!!!\n");
     (*func)(arg);
 
 }
+
 
 int thread_lock_init(int *m, int initial_val) {
     add_to_lock_list(m, initial_val);
     return 1;
 }
+
 
 void thread_lock(int *l) {
     lock_t *m = get_lock(l);
@@ -191,6 +233,7 @@ void thread_lock(int *l) {
     }
     else {
         // nie ma dostępnych zasobów, wątek musi czekać
+        if (debug) printf("locked but thread %d tried\n", currently_running->tid);
         m->waiting_threads_no++;
 
         t_cb* blocked = currently_running;
@@ -211,6 +254,7 @@ void thread_lock(int *l) {
         }
 
         t_cb *nxt_t = get_nxt_ready_thread();
+        currently_running = nxt_t;
         if(swapcontext(blocked->t_context, nxt_t->t_context) == -1) {
             printf("err swap cntxt\n");
             exit(EXIT_FAILURE);
@@ -222,7 +266,11 @@ void thread_lock(int *l) {
 // sem signal
 void thread_unlock(int *l) {
     lock_t *m = get_lock(l);
-    if (debug) printf("thread %d unlocking\n", currently_running->tid);
+    if (debug) {
+        printf("thread %d unlocking\n", currently_running->tid);
+        printf("owner: %d\n", m->tid_owner);
+    }
+
 
     // zdejmij wątek z kolejki
     if(m->waiting_threads_no != 0) {
@@ -234,11 +282,6 @@ void thread_unlock(int *l) {
         m->waiting_threads->first = m->waiting_threads->first->next;
         free(t);
 
-        //while(m->waiting_threads[i]!=-1 && i<50) {
-        //    if (debug) printf("thread with lock: %d\n", m->waiting_threads[i]);
-        //    i++;
-        //}
-        //t_cb* tmp = get_by_tid(m->waiting_threads[i]);
         thr->state = READY;
     }
     else {
@@ -251,6 +294,7 @@ void thread_unlock(int *l) {
 void libinit() {
     thread_q = (t_queue*)malloc(sizeof(t_queue));
     locks = (lock_list*)malloc(sizeof(lock_list));
+    ready_threads = (tid_list*)malloc(sizeof(tid_list));
     locks->first = NULL;
     locks->last = NULL;
     thread_q->first = NULL;
@@ -261,6 +305,7 @@ void libinit() {
 
     if(getcontext(new_cntx) == -1) {
         printf("err init\n");
+        exit(EXIT_FAILURE);
     }
 
     new_cntx->uc_stack.ss_sp = malloc(STACKSIZE);
@@ -285,15 +330,19 @@ int thread_create(void *(*func)(void *), void *arg) {
     makecontext(new_cntx, (void (*)(void))func, 1, arg);
     enqueue(t_id++, new_cntx, READY);
 
-    if (debug) print_queue();
-
     return thread_q->last->tid;
 }
 
 
 void thread_yield() {
     t_cb* next_thr = get_nxt_ready_thread();
+    if (next_thr == NULL) {
+        exit(EXIT_FAILURE);
+    }
     currently_running->state = READY;
+    move_to_end(currently_running->tid);
+    //print_queue();
+
     t_cb* tmp = currently_running;
     next_thr->state = RUNNING;
     currently_running = next_thr;
@@ -308,8 +357,14 @@ void thread_yield() {
 
 // for now assuming that retval is NULL, ! TODO later
 void thread_join(int thread_tid, void **retval) {
+    printf("in join\n");
     t_cb *temp = get_by_tid(thread_tid);
+    if (temp == NULL) {
+        printf("err join\n");
+        exit(EXIT_FAILURE);
+    }
     t_cb *parent = currently_running;
+
     parent->state = BLOCKED;
     currently_running = temp;
     temp->state = RUNNING;
@@ -339,6 +394,5 @@ void thread_exit(void *retval) {
     currently_running->state = FINISHED;
     to_run->state = RUNNING;
     currently_running = to_run;
-
     setcontext(currently_running->t_context);
 }
